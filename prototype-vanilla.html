@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Simulation caisses automatiques</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: Arial, sans-serif; }
+  #hud { position: absolute; top: 12px; left: 12px; color: #fff; background: rgba(0,0,0,.6); padding: 10px 14px; border-radius: 6px; font-size: 14px; line-height: 1.5; pointer-events: none; white-space: pre; }
+  #start { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; background: rgba(0,0,0,.6); cursor: pointer; font-size: 20px; text-align: center; padding: 20px; box-sizing: border-box; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="hud"></div>
+<div id="start">Cliquer pour commencer<br><small>ZQSD (ou WASD) : marcher · souris : regarder · E : occuper / libérer la caisse proche · Échap : quitter</small></div>
+
+<script type="module">
+import * as THREE from 'three';
+
+const CONFIG = {
+  WALK_SPEED: 3,
+  SERVICE_MIN_S: 120,     // durée d'utilisation d'une caisse (hypothèse)
+  SERVICE_MAX_S: 180,
+  SPAWN_INTERVAL_S: 10,   // une nouvelle personne toutes les 10 s
+  INITIAL_OCCUPIED: 0.95,
+};
+
+const AISLE_X = [-4.7, 1.8];
+const ROW_Z = [-1.4, -3.6, -5.8, -8.0];
+const COL_OFFSET = 1.7;
+const BARRIER_Z = 1.0;
+const PATH_Z = BARRIER_Z - 0.3;
+const WINDOW_MS = 60000;
+
+// Géométrie de la vraie file d'attente
+const QUEUE_X = 0;
+const QUEUE_HALF = 0.5;      // demi-largeur du couloir de file (relié à la barrière)
+const GATE_HALF = QUEUE_HALF;
+const QUEUE_FRONT_Z = 2.0;   // ligne d'attente en tête de file
+const QUEUE_BACK_Z = 9.2;    // entrée arrière du couloir de file
+const QUEUE_SPAWN = { x: QUEUE_X, z: QUEUE_BACK_Z + 2.5 };
+
+const EXIT_Z = -9.1;
+const EXIT_HALF = 3.4;
+const PLAYER_R = 0.24;
+const START_POS = { x: QUEUE_X, z: 9.9 };
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xdfe6ec);
+
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 100);
+camera.rotation.order = 'YXZ';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+const sun = new THREE.DirectionalLight(0xffffff, 0.6);
+sun.position.set(5, 10, 5);
+scene.add(sun);
+
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(24, 24),
+  new THREE.MeshStandardMaterial({ color: 0xbfc5cc })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.position.z = 1.5;
+scene.add(floor);
+
+function canvasTexture(w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  draw(c.getContext('2d'), w, h);
+  return new THREE.CanvasTexture(c);
+}
+
+// Marquage au sol du couloir de file
+const queueLaneMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(QUEUE_HALF * 2 - 0.08, QUEUE_BACK_Z - BARRIER_Z),
+  new THREE.MeshStandardMaterial({ color: 0xa9b3bd })
+);
+queueLaneMesh.rotation.x = -Math.PI / 2;
+queueLaneMesh.position.set(QUEUE_X, 0.005, (BARRIER_Z + QUEUE_BACK_Z) / 2);
+scene.add(queueLaneMesh);
+
+const waitLineTex = canvasTexture(256, 64, (g, w, h) => {
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, w, 14);
+  g.fillStyle = '#263238';
+  g.font = 'bold 24px Arial';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('ATTENDEZ ICI', w / 2, 42);
+});
+const waitLine = new THREE.Mesh(
+  new THREE.PlaneGeometry(QUEUE_HALF * 1.85, 0.38),
+  new THREE.MeshBasicMaterial({ map: waitLineTex, transparent: true })
+);
+waitLine.rotation.x = -Math.PI / 2;
+waitLine.position.set(QUEUE_X, 0.008, QUEUE_FRONT_Z - 0.35);
+scene.add(waitLine);
+
+const entrySignTex = canvasTexture(256, 64, (g, w, h) => {
+  g.fillStyle = '#1e3a52';
+  g.fillRect(0, 0, w, h);
+  g.fillStyle = '#ffffff';
+  g.font = 'bold 28px Arial';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('↑ ENTRÉE FILE ↑', w / 2, h / 2);
+});
+const entrySign = new THREE.Mesh(
+  new THREE.PlaneGeometry(QUEUE_HALF * 1.9, 0.45),
+  new THREE.MeshBasicMaterial({ map: entrySignTex })
+);
+entrySign.rotation.x = -Math.PI / 2;
+entrySign.position.set(QUEUE_X, 0.008, QUEUE_BACK_Z + 0.32);
+scene.add(entrySign);
+
+const kiosks = [];
+
+function buildKiosk(x, z, rotY) {
+  const root = new THREE.Group();
+  root.position.set(x, 0, z);
+  root.rotation.y = rotY;
+
+  const metal = new THREE.MeshStandardMaterial({ color: 0x9aa1a9, metalness: 0.5, roughness: 0.35 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x3a3f47, roughness: 0.6 });
+  const black = new THREE.MeshStandardMaterial({ color: 0x111111 });
+  const part = (w, h, d, mat, px, py, pz) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(px, py, pz);
+    root.add(m);
+  };
+
+  part(0.9, 0.95, 0.7, metal, 0, 0.475, 0);
+  part(0.9, 0.04, 0.45, metal, 0, 0.97, 0.1);
+  part(0.6, 0.85, 0.22, dark, 0, 1.375, -0.12);
+  part(0.66, 0.05, 0.26, metal, 0, 1.8, -0.12);
+  part(0.16, 0.06, 0.12, black, 0.2, 1.0, 0.3);
+  part(0.1, 0.2, 0.02, black, 0.25, 1.3, 0.0);
+  part(0.5, 0.03, 0.5, metal, 0.7, 0.92, 0.1);
+  part(0.4, 0.03, 0.55, metal, -0.65, 0.92, 0.05);
+  part(0.03, 0.5, 0.55, dark, -0.88, 1.17, 0.05);
+  part(0.5, 0.4, 0.02, dark, -0.1, 0.35, 0.36);
+  part(0.7, 0.04, 0.03, metal, 0, 0.1, 0.37);
+
+  const screenMat = new THREE.MeshStandardMaterial({ color: 0x2a7fff, emissive: 0x1a4fa0 });
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.38, 0.32), screenMat);
+  screen.position.set(0, 1.42, 0.0);
+  root.add(screen);
+
+  scene.add(root);
+
+  const fx = Math.sin(rotY);
+  const fz = Math.cos(rotY);
+  const stand = { x: x + fx * 1.15, z: z + fz * 1.15 };
+  kiosks.push({ x, z, stand, occupied: false, claimed: false, manual: false, screenMat });
+}
+
+for (const ax of AISLE_X) {
+  for (const z of ROW_Z) {
+    buildKiosk(ax - COL_OFFSET, z, Math.PI / 2);
+    buildKiosk(ax + COL_OFFSET, z, -Math.PI / 2);
+  }
+}
+
+const chromeMat = new THREE.MeshStandardMaterial({ color: 0xc0c6cc, metalness: 0.6, roughness: 0.3 });
+const beltMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
+
+function addStanchion(x, z) {
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1, 8), chromeMat);
+  post.position.set(x, 0.5, z);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.04, 12), chromeMat);
+  base.position.set(x, 0.02, z);
+  scene.add(post, base);
+}
+
+// Barrières horizontales à BARRIER_Z (reliées aux bords du couloir de file)
+for (const sgn of [-1, 1]) {
+  const xs = [];
+  for (let x = GATE_HALF; x <= 11; x += 1.5) xs.push(sgn * x);
+  if (Math.abs(xs[xs.length - 1]) < 11) xs.push(sgn * 11);
+  for (const x of xs) addStanchion(x, BARRIER_Z);
+  for (let i = 0; i < xs.length - 1; i++) {
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(xs[i + 1] - xs[i]), 0.08, 0.02), beltMat);
+    belt.position.set((xs[i] + xs[i + 1]) / 2, 0.85, BARRIER_Z);
+    scene.add(belt);
+  }
+}
+
+// Poteaux et sangles latéraux matérialisant le couloir de file d'attente
+for (const sgn of [-1, 1]) {
+  const x = QUEUE_X + sgn * QUEUE_HALF;
+  const zs = [];
+  for (let z = BARRIER_Z; z <= QUEUE_BACK_Z; z += 1.64) zs.push(z);
+  if (zs[zs.length - 1] < QUEUE_BACK_Z - 0.1) zs.push(QUEUE_BACK_Z);
+  for (let i = 1; i < zs.length; i++) addStanchion(x, zs[i]);
+  for (let i = 0; i < zs.length - 1; i++) {
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.08, zs[i + 1] - zs[i]), beltMat);
+    belt.position.set(x, 0.85, (zs[i] + zs[i + 1]) / 2);
+    scene.add(belt);
+  }
+}
+
+const redMat = new THREE.MeshStandardMaterial({ color: 0xd32f2f });
+const scannerMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
+const exitSignTex = canvasTexture(256, 64, (g, w, h) => {
+  g.fillStyle = '#c8f7c5';
+  g.fillRect(0, 0, w, h);
+  g.fillStyle = '#1b5e20';
+  g.font = 'bold 48px Arial';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('←', w / 2, h / 2);
+});
+for (const sgn of [-1, 1]) {
+  for (const x of [3.4, 5.4, 7.4, 9.4]) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.1, 8), chromeMat);
+    post.position.set(sgn * x, 0.55, EXIT_Z);
+    scene.add(post);
+  }
+  for (const y of [0.4, 0.9]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(6, 0.04, 0.04), chromeMat);
+    rail.position.set(sgn * 6.4, y, EXIT_Z);
+    scene.add(rail);
+  }
+  const scanner = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.5, 0.2), scannerMat);
+  scanner.position.set(sgn * 3.4, 0.9, EXIT_Z);
+  scene.add(scanner);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.05, 0.05), redMat);
+  arm.position.set(sgn * 2.2, 1.0, EXIT_Z);
+  scene.add(arm);
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.4), new THREE.MeshBasicMaterial({ map: exitSignTex }));
+  sign.position.set(sgn * 6.4, 1.5, EXIT_Z);
+  scene.add(sign);
+}
+
+// Boîtes de collision solides (barrières, sangles de file, sorties)
+const WALLS = [
+  { minX: -12, maxX: -GATE_HALF, minZ: BARRIER_Z - 0.06, maxZ: BARRIER_Z + 0.06 },
+  { minX: GATE_HALF, maxX: 12, minZ: BARRIER_Z - 0.06, maxZ: BARRIER_Z + 0.06 },
+  { minX: QUEUE_X - QUEUE_HALF - 0.05, maxX: QUEUE_X - QUEUE_HALF + 0.05, minZ: BARRIER_Z, maxZ: QUEUE_BACK_Z },
+  { minX: QUEUE_X + QUEUE_HALF - 0.05, maxX: QUEUE_X + QUEUE_HALF + 0.05, minZ: BARRIER_Z, maxZ: QUEUE_BACK_Z },
+  { minX: -12, maxX: -EXIT_HALF, minZ: EXIT_Z - 0.08, maxZ: EXIT_Z + 0.08 },
+  { minX: EXIT_HALF, maxX: 12, minZ: EXIT_Z - 0.08, maxZ: EXIT_Z + 0.08 },
+];
+
+function refresh(k) {
+  const free = !k.occupied && !k.claimed;
+  k.screenMat.color.set(free ? 0x00e676 : 0x2a7fff);
+  k.screenMat.emissive.set(free ? 0x00a050 : 0x1a4fa0);
+}
+
+function setOccupied(k, value) {
+  k.occupied = value;
+  refresh(k);
+}
+
+function toggleManual(k) {
+  if (k.manual) {
+    k.manual = false;
+    setOccupied(k, false);
+  } else if (!k.occupied && !k.claimed) {
+    k.manual = true;
+    setOccupied(k, true);
+  }
+}
+
+function nearestKiosk(maxDist = 3) {
+  let best = null;
+  let bestDist = maxDist;
+  for (const k of kiosks) {
+    const d = Math.hypot(camera.position.x - k.x, camera.position.z - k.z);
+    if (d < bestDist) { bestDist = d; best = k; }
+  }
+  return best;
+}
+
+const collidesKiosk = (x, z) => kiosks.some(k => Math.hypot(x - k.x, z - k.z) < 0.75);
+const hitsWall = (x, z) => WALLS.some(w =>
+  x > w.minX - PLAYER_R && x < w.maxX + PLAYER_R &&
+  z > w.minZ - PLAYER_R && z < w.maxZ + PLAYER_R
+);
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+const NPC_COLORS = [0x2e7d32, 0x1565c0, 0xad1457, 0xef6c00, 0x6a1b9a];
+const npcs = [];
+let spawnTimer = 0;
+let simNow = 0;
+const stats = { arrivals: [], finished: [], start: performance.now() };
+
+const randBetween = (min, max) => min + Math.random() * (max - min);
+
+function createNpcMesh() {
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.22, 0.25, 1.2, 12),
+    new THREE.MeshStandardMaterial({ color: NPC_COLORS[Math.floor(Math.random() * NPC_COLORS.length)] })
+  );
+  body.position.y = 0.9;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 12), new THREE.MeshStandardMaterial({ color: 0xf1c27d }));
+  head.position.y = 1.6;
+  group.add(body, head);
+  scene.add(group);
+  return group;
+}
+
+function spawnNpc() {
+  // Évite de faire apparaître un PNJ sur le joueur ou un autre PNJ
+  if (Math.hypot(camera.position.x - QUEUE_SPAWN.x, camera.position.z - QUEUE_SPAWN.z) < 0.9) return false;
+  if (npcs.some(n => Math.hypot(n.mesh.position.x - QUEUE_SPAWN.x, n.mesh.position.z - QUEUE_SPAWN.z) < 0.9)) return false;
+
+  const group = createNpcMesh();
+  group.position.set(QUEUE_SPAWN.x, 0, QUEUE_SPAWN.z);
+  group.rotation.y = Math.PI;
+
+  npcs.push({ mesh: group, state: 'enter', spotX: randBetween(-0.5, 0.5), kiosk: null, route: null, stage: 0, useLeft: 0, useTotal: 0, seeded: false });
+  stats.arrivals.push(simNow);
+  return true;
+}
+
+function seedOccupied() {
+  for (const k of kiosks) {
+    if (Math.random() >= CONFIG.INITIAL_OCCUPIED) continue;
+    const group = createNpcMesh();
+    group.position.set(k.stand.x, 0, k.stand.z);
+    group.rotation.y = Math.atan2(k.x - k.stand.x, k.z - k.stand.z);
+    const useTotal = randBetween(CONFIG.SERVICE_MIN_S, CONFIG.SERVICE_MAX_S);
+    npcs.push({ mesh: group, state: 'using', kiosk: k, route: null, stage: 0, useLeft: useTotal * Math.random(), useTotal, seeded: true });
+    setOccupied(k, true);
+  }
+  const seededUsing = npcs.filter(n => n.state === 'using' && n.seeded);
+  if (seededUsing.length) {
+    const first = seededUsing.reduce((a, b) => (a.useLeft < b.useLeft ? a : b));
+    first.useLeft = Math.min(first.useLeft, randBetween(4, 6));
+  }
+}
+
+function moveToward(mesh, tx, tz, maxStep) {
+  const dx = tx - mesh.position.x;
+  const dz = tz - mesh.position.z;
+  const d = Math.hypot(dx, dz);
+  if (d <= maxStep) {
+    mesh.position.x = tx;
+    mesh.position.z = tz;
+    return true;
+  }
+  mesh.position.x += (dx / d) * maxStep;
+  mesh.position.z += (dz / d) * maxStep;
+  mesh.rotation.y = Math.atan2(dx, dz);
+  return false;
+}
+
+function dispatchWaiting(npc) {
+  const freeKiosks = kiosks.filter(k => !k.occupied && !k.claimed);
+  if (!freeKiosks.length) return;
+  const distFromMouth = k => Math.hypot(k.stand.x - QUEUE_X, k.stand.z - PATH_Z);
+  const free = freeKiosks.reduce((a, b) => (distFromMouth(b) < distFromMouth(a) ? b : a));
+  npc.state = 'walk';
+  npc.kiosk = free;
+  npc.route = [{ x: free.stand.x, z: PATH_Z }, free.stand];
+  npc.stage = 0;
+  free.claimed = true;
+}
+
+function updateNpcs(dt) {
+  spawnTimer -= dt;
+  if (spawnTimer <= 0) spawnTimer = spawnNpc() ? CONFIG.SPAWN_INTERVAL_S : 0.5;
+
+  for (const npc of npcs) {
+    if (npc.state === 'enter') {
+      const x0 = npc.mesh.position.x;
+      const z0 = npc.mesh.position.z;
+      const arrived = moveToward(npc.mesh, npc.spotX, PATH_Z, 1.35 * dt);
+      if (hitsPlayer(npc.mesh.position.x, npc.mesh.position.z, x0, z0)) {
+        npc.mesh.position.x = x0;
+        npc.mesh.position.z = z0;
+      } else if (arrived) {
+        npc.state = 'wait';
+      }
+    } else if (npc.state === 'wait') {
+      dispatchWaiting(npc);
+    }
+  }
+
+  // Parcours vers caisse, utilisation et sortie par les portillons du fond (EXIT_Z)
+  for (let i = npcs.length - 1; i >= 0; i--) {
+    const npc = npcs[i];
+    const k = npc.kiosk;
+    if (npc.state === 'walk') {
+      const wp = npc.route[npc.stage];
+      if (moveToward(npc.mesh, wp.x, wp.z, 1.45 * dt)) npc.stage++;
+      if (npc.stage === npc.route.length) {
+        npc.state = 'using';
+        npc.mesh.rotation.y = Math.atan2(k.x - k.stand.x, k.z - k.stand.z);
+        npc.useTotal = randBetween(CONFIG.SERVICE_MIN_S, CONFIG.SERVICE_MAX_S);
+        npc.useLeft = npc.useTotal;
+        setOccupied(k, true);
+      }
+    } else if (npc.state === 'using') {
+      npc.useLeft -= dt;
+      if (npc.useLeft <= 0) {
+        k.claimed = false;
+        setOccupied(k, false);
+        if (!npc.seeded) stats.finished.push(simNow);
+        const aisleX = Math.abs(k.stand.x - AISLE_X[0]) < Math.abs(k.stand.x - AISLE_X[1]) ? AISLE_X[0] : AISLE_X[1];
+        npc.route = [
+          { x: aisleX, z: k.stand.z },
+          { x: aisleX, z: EXIT_Z + 0.6 },
+          { x: clamp(aisleX, -0.6, 0.6), z: EXIT_Z + 0.5 },
+          { x: clamp(aisleX, -0.6, 0.6), z: EXIT_Z - 1.5 },
+        ];
+        npc.stage = 0;
+        npc.state = 'exit';
+      }
+    } else if (npc.state === 'exit') {
+      const wp = npc.route[npc.stage];
+      if (moveToward(npc.mesh, wp.x, wp.z, 1.45 * dt)) npc.stage++;
+      if (npc.stage === npc.route.length) {
+        scene.remove(npc.mesh);
+        npcs.splice(i, 1);
+      }
+    }
+  }
+}
+
+function predict(now) {
+  const inWindow = arr => {
+    const recent = arr.filter(t => now - t <= WINDOW_MS);
+    arr.length = 0;
+    arr.push(...recent);
+    return recent.length;
+  };
+  const windowMin = Math.max(Math.min((now - stats.start) / 60000, 1), 0.5);
+  return {
+    arrivalsPerMin: inWindow(stats.arrivals) / windowMin,
+    throughputPerMin: inWindow(stats.finished) / windowMin,
+  };
+}
+
+function hitsNpc(x, z, x0, z0) {
+  for (const npc of npcs) {
+    const nx = npc.mesh.position.x;
+    const nz = npc.mesh.position.z;
+    const dNew = Math.hypot(x - nx, z - nz);
+    const dOld = Math.hypot(x0 - nx, z0 - nz);
+    if (dNew < 0.56 && dNew < dOld) return true;
+  }
+  return false;
+}
+
+function hitsPlayer(x, z, x0, z0) {
+  if (Math.min(z0, z) < BARRIER_Z) return false;
+  const dNew = Math.hypot(x - camera.position.x, z - camera.position.z);
+  const dOld = Math.hypot(x0 - camera.position.x, z0 - camera.position.z);
+  return dNew < 0.56 && dNew < dOld;
+}
+
+const keys = {};
+let yaw = 0;
+let pitch = 0;
+
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.repeat) return;
+  if (e.code === 'KeyE') {
+    const k = nearestKiosk();
+    if (k) toggleManual(k);
+  }
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('blur', () => { for (const code in keys) keys[code] = false; });
+
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement !== renderer.domElement) return;
+  yaw -= e.movementX * 0.002;
+  pitch = clamp(pitch - e.movementY * 0.002, -1.3, 1.3);
+});
+
+const startEl = document.getElementById('start');
+startEl.addEventListener('click', () => {
+  renderer.domElement.requestPointerLock();
+});
+document.addEventListener('pointerlockchange', () => {
+  startEl.style.display = document.pointerLockElement ? 'none' : 'flex';
+});
+
+const hud = document.getElementById('hud');
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+function resetSim() {
+  for (const npc of npcs) scene.remove(npc.mesh);
+  npcs.length = 0;
+  spawnTimer = 1.5;
+  stats.arrivals.length = 0;
+  stats.finished.length = 0;
+  stats.start = performance.now();
+  for (const k of kiosks) {
+    k.occupied = false;
+    k.claimed = false;
+    k.manual = false;
+  }
+  kiosks.forEach(refresh);
+  seedOccupied();
+  camera.position.set(START_POS.x, 1.6, START_POS.z);
+  yaw = 0;
+  pitch = 0;
+}
+
+let last = performance.now();
+
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  simNow = now;
+
+  camera.rotation.y = yaw;
+  camera.rotation.x = pitch;
+
+  let mx = 0, mz = 0;
+  if (keys.KeyW) mz -= 1;
+  if (keys.KeyS) mz += 1;
+  if (keys.KeyA) mx -= 1;
+  if (keys.KeyD) mx += 1;
+
+  if (mx || mz) {
+    const len = Math.hypot(mx, mz);
+    mx /= len; mz /= len;
+    const dx = -Math.sin(yaw) * (-mz) + Math.cos(yaw) * mx;
+    const dz = -Math.cos(yaw) * (-mz) - Math.sin(yaw) * mx;
+    const step = CONFIG.WALK_SPEED * dt;
+
+    const x0 = camera.position.x;
+    const z0 = camera.position.z;
+    let nx = clamp(x0 + dx * step, -11, 11);
+    let nz = clamp(z0 + dz * step, -9.6, 12.0);
+
+    const inStore = Math.min(z0, nz) < BARRIER_Z;
+    const solid = (x, z, px, pz) => collidesKiosk(x, z) || (!inStore && (hitsWall(x, z) || hitsNpc(x, z, px, pz)));
+
+    if (!solid(nx, z0, x0, z0)) {
+      camera.position.x = nx;
+    }
+
+    const x1 = camera.position.x;
+    if (!solid(x1, nz, x1, z0)) {
+      camera.position.z = nz;
+    }
+  }
+
+  if (camera.position.z < EXIT_Z) resetSim();
+
+  updateNpcs(dt);
+
+  for (const k of kiosks) refresh(k);
+
+  const p = predict(now);
+  hud.textContent =
+    `Débit ${p.throughputPerMin.toFixed(1)}/min  ·  Arrivées ${p.arrivalsPerMin.toFixed(1)}/min\n` +
+    `ZQSD marcher · souris regarder · E occuper/libérer · Échap quitter`;
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+resetSim();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
