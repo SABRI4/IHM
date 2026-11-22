@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <title>Simulation caisses automatiques</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: Arial, sans-serif; }
-  #hud { position: absolute; top: 12px; left: 12px; color: #fff; background: rgba(0,0,0,.6); padding: 10px 14px; border-radius: 6px; font-size: 14px; line-height: 1.5; pointer-events: none; white-space: pre; }
-  #start { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; background: rgba(0,0,0,.6); cursor: pointer; font-size: 20px; text-align: center; padding: 20px; box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #111; font-family: Arial, sans-serif; }
+  #hud { position: absolute; top: 12px; left: 12px; color: #f8fafc; background: rgba(15, 23, 42, 0.85); border-left: 4px solid #E0001A; padding: 10px 14px; border-radius: 6px; font-size: 14px; line-height: 1.5; pointer-events: none; white-space: pre; }
+  #start { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; background: rgba(15, 23, 42, 0.82); cursor: pointer; font-size: 20px; text-align: center; padding: 20px; box-sizing: border-box; }
 </style>
 <script type="importmap">
 { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
@@ -48,7 +48,7 @@ const PLAYER_R = 0.24;
 const START_POS = { x: QUEUE_X, z: 9.9 };
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xdfe6ec);
+scene.background = new THREE.Color(0xe2e8f0);
 
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 100);
 camera.rotation.order = 'YXZ';
@@ -65,7 +65,7 @@ scene.add(sun);
 
 const floor = new THREE.Mesh(
   new THREE.PlaneGeometry(24, 24),
-  new THREE.MeshStandardMaterial({ color: 0xbfc5cc })
+  new THREE.MeshStandardMaterial({ color: 0xcbd5e1 })
 );
 floor.rotation.x = -Math.PI / 2;
 floor.position.z = 1.5;
@@ -82,16 +82,16 @@ function canvasTexture(w, h, draw) {
 // Marquage au sol du couloir de file
 const queueLaneMesh = new THREE.Mesh(
   new THREE.PlaneGeometry(QUEUE_HALF * 2 - 0.08, QUEUE_BACK_Z - BARRIER_Z),
-  new THREE.MeshStandardMaterial({ color: 0xa9b3bd })
+  new THREE.MeshStandardMaterial({ color: 0x334155 })
 );
 queueLaneMesh.rotation.x = -Math.PI / 2;
 queueLaneMesh.position.set(QUEUE_X, 0.005, (BARRIER_Z + QUEUE_BACK_Z) / 2);
 scene.add(queueLaneMesh);
 
 const waitLineTex = canvasTexture(256, 64, (g, w, h) => {
-  g.fillStyle = '#ffffff';
+  g.fillStyle = '#E0001A';
   g.fillRect(0, 0, w, 14);
-  g.fillStyle = '#263238';
+  g.fillStyle = '#ffffff';
   g.font = 'bold 24px Arial';
   g.textAlign = 'center';
   g.textBaseline = 'middle';
@@ -106,7 +106,7 @@ waitLine.position.set(QUEUE_X, 0.008, QUEUE_FRONT_Z - 0.35);
 scene.add(waitLine);
 
 const entrySignTex = canvasTexture(256, 64, (g, w, h) => {
-  g.fillStyle = '#1e3a52';
+  g.fillStyle = '#E0001A';
   g.fillRect(0, 0, w, h);
   g.fillStyle = '#ffffff';
   g.font = 'bold 28px Arial';
@@ -129,9 +129,9 @@ function buildKiosk(x, z, rotY) {
   root.position.set(x, 0, z);
   root.rotation.y = rotY;
 
-  const metal = new THREE.MeshStandardMaterial({ color: 0x9aa1a9, metalness: 0.5, roughness: 0.35 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x3a3f47, roughness: 0.6 });
-  const black = new THREE.MeshStandardMaterial({ color: 0x111111 });
+  const metal = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.5, roughness: 0.35 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 });
+  const black = new THREE.MeshStandardMaterial({ color: 0x0f172a });
   const part = (w, h, d, mat, px, py, pz) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
     m.position.set(px, py, pz);
@@ -150,7 +150,7 @@ function buildKiosk(x, z, rotY) {
   part(0.5, 0.4, 0.02, dark, -0.1, 0.35, 0.36);
   part(0.7, 0.04, 0.03, metal, 0, 0.1, 0.37);
 
-  const screenMat = new THREE.MeshStandardMaterial({ color: 0x2a7fff, emissive: 0x1a4fa0 });
+  const screenMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6, emissive: 0x1d4ed8 });
   const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.38, 0.32), screenMat);
   screen.position.set(0, 1.42, 0.0);
   root.add(screen);
@@ -160,7 +160,7 @@ function buildKiosk(x, z, rotY) {
   const fx = Math.sin(rotY);
   const fz = Math.cos(rotY);
   const stand = { x: x + fx * 1.15, z: z + fz * 1.15 };
-  kiosks.push({ x, z, stand, occupied: false, claimed: false, manual: false, screenMat });
+  kiosks.push({ x, z, rotY, stand, occupied: false, claimed: false, manual: false, screenMat });
 }
 
 for (const ax of AISLE_X) {
@@ -170,8 +170,8 @@ for (const ax of AISLE_X) {
   }
 }
 
-const chromeMat = new THREE.MeshStandardMaterial({ color: 0xc0c6cc, metalness: 0.6, roughness: 0.3 });
-const beltMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
+const chromeMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.6, roughness: 0.3 });
+const beltMat = new THREE.MeshStandardMaterial({ color: 0xE0001A });
 
 function addStanchion(x, z) {
   const post = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1, 8), chromeMat);
@@ -208,12 +208,12 @@ for (const sgn of [-1, 1]) {
   }
 }
 
-const redMat = new THREE.MeshStandardMaterial({ color: 0xd32f2f });
-const scannerMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
+const redMat = new THREE.MeshStandardMaterial({ color: 0xE0001A });
+const scannerMat = new THREE.MeshStandardMaterial({ color: 0x0f172a });
 const exitSignTex = canvasTexture(256, 64, (g, w, h) => {
-  g.fillStyle = '#c8f7c5';
+  g.fillStyle = '#009B4D';
   g.fillRect(0, 0, w, h);
-  g.fillStyle = '#1b5e20';
+  g.fillStyle = '#ffffff';
   g.font = 'bold 48px Arial';
   g.textAlign = 'center';
   g.textBaseline = 'middle';
@@ -252,9 +252,9 @@ const WALLS = [
 ];
 
 function refresh(k) {
-  const free = !k.occupied && !k.claimed;
-  k.screenMat.color.set(free ? 0x00e676 : 0x2a7fff);
-  k.screenMat.emissive.set(free ? 0x00a050 : 0x1a4fa0);
+  const free = !k.occupied;
+  k.screenMat.color.set(free ? 0x00e676 : 0x3b82f6);
+  k.screenMat.emissive.set(free ? 0x008a44 : 0x1d4ed8);
 }
 
 function setOccupied(k, value) {
@@ -282,14 +282,23 @@ function nearestKiosk(maxDist = 3) {
   return best;
 }
 
-const collidesKiosk = (x, z) => kiosks.some(k => Math.hypot(x - k.x, z - k.z) < 0.75);
+const KIOSK_HALF_W = 0.95;
+const KIOSK_BACK = -0.35;
+const KIOSK_FRONT = 0.39;
+const collidesKiosk = (x, z) => kiosks.some(k => {
+  const dx = x - k.x, dz = z - k.z;
+  const c = Math.cos(k.rotY), s = Math.sin(k.rotY);
+  const lx = dx * c - dz * s;
+  const lz = dx * s + dz * c;
+  return Math.abs(lx) < KIOSK_HALF_W + PLAYER_R && lz > KIOSK_BACK - PLAYER_R && lz < KIOSK_FRONT + PLAYER_R;
+});
 const hitsWall = (x, z) => WALLS.some(w =>
   x > w.minX - PLAYER_R && x < w.maxX + PLAYER_R &&
   z > w.minZ - PLAYER_R && z < w.maxZ + PLAYER_R
 );
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
-const NPC_COLORS = [0x2e7d32, 0x1565c0, 0xad1457, 0xef6c00, 0x6a1b9a];
+const NPC_COLORS = [0x0284c7, 0x16a34a, 0xd97706, 0x9333ea, 0xdb2777, 0x475569];
 const npcs = [];
 let spawnTimer = 0;
 let simNow = 0;
@@ -375,15 +384,7 @@ function updateNpcs(dt) {
 
   for (const npc of npcs) {
     if (npc.state === 'enter') {
-      const x0 = npc.mesh.position.x;
-      const z0 = npc.mesh.position.z;
-      const arrived = moveToward(npc.mesh, npc.spotX, PATH_Z, 1.35 * dt);
-      if (hitsPlayer(npc.mesh.position.x, npc.mesh.position.z, x0, z0)) {
-        npc.mesh.position.x = x0;
-        npc.mesh.position.z = z0;
-      } else if (arrived) {
-        npc.state = 'wait';
-      }
+      if (stepNpc(npc, npc.spotX, PATH_Z, 1.35 * dt)) npc.state = 'wait';
     } else if (npc.state === 'wait') {
       dispatchWaiting(npc);
     }
@@ -456,10 +457,49 @@ function hitsNpc(x, z, x0, z0) {
 }
 
 function hitsPlayer(x, z, x0, z0) {
-  if (Math.min(z0, z) < BARRIER_Z) return false;
+  if (camera.position.z < BARRIER_Z) return false;
   const dNew = Math.hypot(x - camera.position.x, z - camera.position.z);
   const dOld = Math.hypot(x0 - camera.position.x, z0 - camera.position.z);
   return dNew < 0.56 && dNew < dOld;
+}
+
+const NPC_SEP = 0.5;
+
+function npcBlocked(x, z, x0, z0, self) {
+  if (hitsPlayer(x, z, x0, z0)) return true;
+  if (Math.min(z0, z) >= BARRIER_Z && hitsWall(x, z)) return true;
+  return npcs.some(o => {
+    if (o === self || (o.state !== 'enter' && o.state !== 'wait')) return false;
+    const ox = o.mesh.position.x;
+    const oz = o.mesh.position.z;
+    const dNew = Math.hypot(x - ox, z - oz);
+    return dNew < NPC_SEP && dNew < Math.hypot(x0 - ox, z0 - oz);
+  });
+}
+
+function stepNpc(npc, tx, tz, maxStep) {
+  const p = npc.mesh.position;
+  const x0 = p.x;
+  const z0 = p.z;
+  const dx = tx - x0;
+  const dz = tz - z0;
+  const d = Math.hypot(dx, dz);
+  if (d < 1e-4) return true;
+  const s = Math.min(d, maxStep);
+  const nx = x0 + (dx / d) * s;
+  const nz = z0 + (dz / d) * s;
+  if (!npcBlocked(nx, nz, x0, z0, npc)) {
+    p.x = nx;
+    p.z = nz;
+  } else if (!npcBlocked(nx, z0, x0, z0, npc)) {
+    p.x = nx;
+  } else if (!npcBlocked(x0, nz, x0, z0, npc)) {
+    p.z = nz;
+  } else {
+    return false;
+  }
+  npc.mesh.rotation.y = Math.atan2(dx, dz);
+  return Math.hypot(tx - p.x, tz - p.z) < 1e-4;
 }
 
 const keys = {};
