@@ -61,7 +61,7 @@
   </div>
 </div>
 
-<div id="start">Cliquer pour commencer<br><small>ZQSD (ou WASD) : marcher · souris : regarder · E : occuper / libérer la caisse proche · H : demander de l'aide · P : paramètres · Échap : pause</small></div>
+<div id="start">Cliquer pour commencer<br><small>ZQSD (ou WASD) : marcher · souris : regarder · E : occuper / libérer la caisse proche · H : demander de l'aide · C : vue aérienne · P : paramètres · Échap : pause</small></div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -101,6 +101,10 @@ scene.background = new THREE.Color(0xe2e8f0);
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 100);
 camera.rotation.order = 'YXZ';
 
+const aerialCam = new THREE.PerspectiveCamera(68, innerWidth / innerHeight, 0.1, 100);
+aerialCam.position.set(0, 14.5, 8.5);
+aerialCam.lookAt(0, 0, -2.5);
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
@@ -113,7 +117,7 @@ scene.add(sun);
 
 const floor = new THREE.Mesh(
   new THREE.PlaneGeometry(24, 24),
-  new THREE.MeshStandardMaterial({ color: 0xcbd5e1 })
+  new THREE.MeshBasicMaterial({ color: 0xffffff })
 );
 floor.rotation.x = -Math.PI / 2;
 floor.position.z = 1.5;
@@ -743,6 +747,7 @@ function stepNpc(npc, tx, tz, maxStep) {
 const keys = {};
 let yaw = 0;
 let pitch = 0;
+let aerialView = false;
 
 addEventListener('keydown', e => {
   keys[e.code] = true;
@@ -755,6 +760,7 @@ addEventListener('keydown', e => {
     const k = nearestKiosk();
     if (k) k.help = !k.help;
   }
+  if (e.code === 'KeyC') aerialView = !aerialView;
   if (e.code === 'KeyP') {
     panelEl.classList.toggle('hidden');
     if (!panelEl.classList.contains('hidden') && document.pointerLockElement) document.exitPointerLock();
@@ -826,6 +832,8 @@ const hud = document.getElementById('hud');
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
+  aerialCam.aspect = innerWidth / innerHeight;
+  aerialCam.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
 
@@ -911,9 +919,9 @@ function frame(now) {
   const p = predict(simNow);
   hud.textContent =
     `Débit ${p.throughputPerMin.toFixed(1)}/min  ·  Arrivées ${p.arrivalsPerMin.toFixed(1)}/min\n` +
-    `ZQSD marcher · souris regarder · E occuper/libérer · H aide`;
+    `ZQSD marcher · souris regarder · E occuper/libérer · H aide · C vue aérienne`;
 
-  renderer.render(scene, camera);
+  renderer.render(scene, aerialView ? aerialCam : camera);
   requestAnimationFrame(frame);
 }
 
